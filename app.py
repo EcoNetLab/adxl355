@@ -311,6 +311,35 @@ def index():
 
 
 @app.route("/api/data")
+BUCKET_S = 0.02     # 20 ms buckets -> 500 buckets per 10 s window
+
+def decimate_minmax(t, arrays):
+    """Min/max per fixed, absolute-time bucket. Stable between refreshes."""
+    if len(t) < 2:
+        return [], [[] for _ in arrays]
+
+    ids = np.floor(t / BUCKET_S).astype(np.int64)
+    starts = np.flatnonzero(np.diff(ids, prepend=ids[0] - 1))
+
+    # Drop the newest bucket: it is still filling, so its min/max change.
+    if len(starts) > 1:
+        cut = starts[-1]
+        arrays = [a[:cut] for a in arrays]
+        starts = starts[:-1]
+
+    centers = ids[starts] * BUCKET_S + BUCKET_S / 2
+    out_t = np.empty(2 * len(starts))
+    out_t[0::2] = centers - BUCKET_S / 4
+    out_t[1::2] = centers + BUCKET_S / 4
+
+    out = []
+    for a in arrays:
+        v = np.empty(2 * len(starts))
+        v[0::2] = np.minimum.reduceat(a, starts)
+        v[1::2] = np.maximum.reduceat(a, starts)
+        out.append(v.tolist())
+    return out_t.tolist(), out
+
 def get_data():
     with data_lock:
         t = np.array(timestamps)
@@ -318,7 +347,9 @@ def get_data():
         y = np.array(ys)
         z = np.array(zs)
 
-    mask = t >= time.time() - WINDOW_SECONDS
+    # Window starts on a bucket boundary so the oldest bucket is stable.
+    cutoff = (np.floor((time.time() - WINDOW_SECONDS) / BUCKET_S) + 1) * BUCKET_S
+    mask = t >= cutoff
     t, x, y, z = t[mask], x[mask], y[mask], z[mask]
 
     analysis = None
@@ -330,13 +361,13 @@ def get_data():
             "z": analyse_axis(z, fs),
         }
 
-    step = max(1, len(t) // DISPLAY_POINTS)
+    plot_t, (px, py, pz) = decimate_minmax(t, [x, y, z])
 
     return jsonify({
-        "timestamps": t[::step].tolist(),
-        "x": x[::step].tolist(),
-        "y": y[::step].tolist(),
-        "z": z[::step].tolist(),
+        "timestamps": plot_t,
+        "x": px,
+        "y": py,
+        "z": pz,
         "analysis": analysis,
         "sample_rate": SAMPLE_RATE,
         "display_rate": DISPLAY_RATE,

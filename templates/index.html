@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Real-Time Device Viewer</title>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 30px;
+            background: #f5f5f5;
+        }
+
+        .controls {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin: 20px 0;
+        }
+
+        button {
+            padding: 12px 18px;
+            font-size: 15px;
+            cursor: pointer;
+        }
+
+        button:disabled {
+            cursor: not-allowed;
+            opacity: 0.5;
+        }
+
+        .dashboard {
+            display: flex;
+            align-items: flex-start;
+            gap: 24px;
+            width: 100%;
+        }
+
+        .chart-container {
+            position: relative;
+            flex: 3;
+            min-width: 0;
+            height: 400px;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-sizing: border-box;
+        }
+
+        .analysis-container {
+            flex: 2;
+            min-width: 300px;
+        }
+
+        @media (max-width: 750px) {
+            .dashboard {
+                flex-direction: column;
+            }
+
+            .chart-container,
+            .analysis-container {
+                width: 100%;
+                flex: auto;
+                box-sizing: border-box;
+            }
+
+            .chart-container {
+                height: 350px;
+            }
+        }
+
+        #analysisTable {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+            font-size: 14px;
+            background: white;
+        }
+
+        #analysisTable th,
+        #analysisTable td {
+            border: 1px solid #ccc;
+            padding: 8px;
+            text-align: left;
+        }
+
+        #analysisTable th {
+            background-color: #f2f2f2;
+        }
+
+        #analysisTable td:nth-child(-n+4):not(:first-child) {
+            text-align: right;
+            font-family: monospace;
+        }
+
+        #status, #recordingStatus {
+            margin: 12px 0;
+        }
+
+        #recordingStatus {
+            font-weight: bold;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>DEPZ Accelerometer Signal</h1>
+
+    <div class="controls">
+        <button id="startButton" type="button">
+            Start Recording
+        </button>
+
+        <button id="stopButton" type="button" disabled>
+            Stop Recording
+        </button>
+
+        <button id="downloadButton" type="button" disabled>
+            Download CSV
+        </button>
+    </div>
+
+    <div id="recordingStatus" aria-live="polite">
+        Recording stopped
+    </div>
+
+    <div id="status">
+        Connecting to data source...
+    </div>
+
+    <div class="dashboard">
+        <div class="chart-container">
+            <canvas id="signalChart"></canvas>
+        </div>
+
+        <div class="analysis-container">
+
+            <h3>Signal Analysis</h3>
+
+            <table id="analysisTable">
+                <thead>
+                    <tr>
+                        <th>Parameter</th>
+                        <th>X</th>
+                        <th>Y</th>
+                        <th>Z</th>
+                        <th>Unit</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Frequency (F)</td>
+                        <td id="frequency-x">--</td>
+                        <td id="frequency-y">--</td>
+                        <td id="frequency-z">--</td>
+                        <td>Hz</td>
+                    </tr>
+                    <tr>
+                        <td>Peak acceleration (A)</td>
+                        <td id="peak_g-x">--</td>
+                        <td id="peak_g-y">--</td>
+                        <td id="peak_g-z">--</td>
+                        <td>G</td>
+                    </tr>
+                    <tr>
+                        <td>Peak acceleration (A)</td>
+                        <td id="peak_ms2-x">--</td>
+                        <td id="peak_ms2-y">--</td>
+                        <td id="peak_ms2-z">--</td>
+                        <td>m/s²</td>
+                    </tr>
+                    <tr>
+                        <td>Peak displacement (X)</td>
+                        <td id="disp_mm-x">--</td>
+                        <td id="disp_mm-y">--</td>
+                        <td id="disp_mm-z">--</td>
+                        <td>mm</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        const statusElement = document.getElementById("status");
+        const recordingStatus =
+            document.getElementById("recordingStatus");
+
+        const startButton = document.getElementById("startButton");
+        const stopButton = document.getElementById("stopButton");
+        const downloadButton =
+            document.getElementById("downloadButton");
+
+        const AXES = [
+            { key: "x", label: "X", color: "#d62728" },
+            { key: "y", label: "Y", color: "#2ca02c" },
+            { key: "z", label: "Z", color: "#1f77b4" }
+        ];
+
+        const chart = new Chart(
+            document.getElementById("signalChart"),
+            {
+                type: "line",
+
+                data: {
+                    datasets: AXES.map(a => ({
+                        label: a.label,
+                        data: [],
+                        borderColor: a.color,
+                        borderWidth: 1.5,
+                        pointRadius: 0,
+                        tension: 0,
+                        fill: false
+                    }))
+                },
+
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: false,
+                    parsing: false,
+
+                    scales: {
+                        x: {
+                            type: "linear",
+                            title: {
+                                display: true,
+                                text: "Actual time"
+                            },
+                            ticks: {
+                                callback: value =>
+                                    new Date(value * 1000).toLocaleTimeString([], {
+                                        hour: "2-digit",
+                                        minute: "2-digit",
+                                        second: "2-digit"
+                                    })
+                            }
+                        },
+
+                        y: {
+                            title: {
+                                display: true,
+                                text: "Acceleration (m/s²)"
+                            }
+                        }
+                    }
+                }
+            }
+        );
+
+        async function requestJSON(url, options = {}) {
+            const response = await fetch(url, options);
+            const result = await response.json();
+
+            if (!response.ok) {
+                throw new Error(result.error || `HTTP ${response.status}`);
+            }
+
+            return result;
+        }
+
+        function showRecordingState(state) {
+            const active = state.recording;
+
+            startButton.disabled = active;
+            stopButton.disabled = !active;
+
+            downloadButton.disabled = !state.filename;
+
+            if (active) {
+                recordingStatus.textContent =
+                    `● Recording: ${state.filename}`;
+            } else if (state.filename) {
+                recordingStatus.textContent =
+                    `Recording stopped. File: ${state.filename}`;
+            } else {
+                recordingStatus.textContent =
+                    "Recording stopped. Press Start Recording to begin.";
+            }
+        }
+
+        async function refreshRecordingState() {
+            try {
+                const state = await requestJSON(
+                    "/api/recording/status"
+                );
+                showRecordingState(state);
+            } catch (error) {
+                recordingStatus.textContent =
+                    "Recording status error: " + error.message;
+            }
+        }
+
+        startButton.addEventListener("click", async () => {
+            startButton.disabled = true;
+
+            try {
+                const state = await requestJSON(
+                    "/api/recording/start",
+                    { method: "POST" }
+                );
+                showRecordingState(state);
+            } catch (error) {
+                recordingStatus.textContent =
+                    "Could not start recording: " + error.message;
+                await refreshRecordingState();
+            }
+        });
+
+        stopButton.addEventListener("click", async () => {
+            stopButton.disabled = true;
+
+            try {
+                const state = await requestJSON(
+                    "/api/recording/stop",
+                    { method: "POST" }
+                );
+                showRecordingState(state);
+            } catch (error) {
+                recordingStatus.textContent =
+                    "Could not stop recording: " + error.message;
+                await refreshRecordingState();
+            }
+        });
+
+        downloadButton.addEventListener("click", () => {
+            window.location.href = "/download";
+        });
+
+        function fmt(value, digits) {
+            return (value === null || value === undefined)
+                ? "--" : value.toFixed(digits);
+        }
+
+        // The analysis is computed on the server from the full-rate data.
+        function updateAnalysisTable(analysis) {
+            const rows = [
+                { id: "frequency", digits: 3 },
+                { id: "peak_g",    digits: 4 },
+                { id: "peak_ms2",  digits: 4 },
+                { id: "disp_mm",   digits: 4 }
+            ];
+
+            for (const axis of AXES) {
+                const r = analysis ? analysis[axis.key] : null;
+                for (const row of rows) {
+                    document.getElementById(`${row.id}-${axis.key}`)
+                        .textContent = fmt(r ? r[row.id] : null, row.digits);
+                }
+            }
+        }
+
+        async function updateChart() {
+            try {
+                const result = await requestJSON("/api/data");
+
+                AXES.forEach((axis, i) => {
+                    chart.data.datasets[i].data =
+                        result.timestamps.map((t, j) => ({
+                            x: t,
+                            y: result[axis.key][j]
+                        }));
+                });
+
+                updateAnalysisTable(result.analysis);
+
+                // Scroll the x-axis using the newest sample time rather
+                // than the browser clock, so a clock difference between
+                // this device and the Pi does not break the plot.
+                const n = result.timestamps.length;
+                if (n > 0) {
+                    const last = result.timestamps[n - 1];
+                    chart.options.scales.x.min = last - 10;
+                    chart.options.scales.x.max = last;
+                }
+
+                chart.update("none");
+
+                statusElement.textContent =
+                    `Points displayed: ${n} per axis` +
+                    ` | Acquisition: ${result.sample_rate} Hz` +
+                    ` | Display: ${result.display_rate} Hz`;
+
+            } catch (error) {
+                statusElement.textContent =
+                    "Data error: " + error.message;
+            }
+        }
+
+        // Initialize the controls and live graph.
+        refreshRecordingState();
+        updateChart();
+
+        setInterval(updateChart, 100);
+        setInterval(refreshRecordingState, 1000);
+    </script>
+</body>
+</html>

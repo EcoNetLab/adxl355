@@ -23,7 +23,7 @@ SAMPLE_RATE = 1000          # must match the sensor's sampling_frequency
 DISPLAY_RATE = 10           # browser refresh rate (Hz), informational
 WINDOW_SECONDS = 10
 BUFFER_SIZE = SAMPLE_RATE * WINDOW_SECONDS
-DISPLAY_POINTS = 500        # points per axis sent to the browser
+BUCKET_S = 0.02             # chart bucket width: 20 ms -> 500 buckets/window
 READ_SCANS = 100            # scans requested per read()
 
 G = 9.80665
@@ -184,8 +184,6 @@ def decode(buf, scale, offset_ns):
 
 
 def acquisition_loop():
-    global csv_writer
-
     try:
         scale = float((IIO_DEV / "in_accel_scale").read_text())
         fd = os.open(IIO_NODE, os.O_RDONLY)
@@ -302,16 +300,8 @@ def analyse_axis(sig, fs):
 
 
 # --------------------------------------------------
-# Web interface and APIs
+# Chart decimation: fixed time buckets, min/max per bucket
 # --------------------------------------------------
-
-@app.route("/")
-def index():
-    return render_template("index.html")
-
-
-@app.route("/api/data")
-BUCKET_S = 0.02     # 20 ms buckets -> 500 buckets per 10 s window
 
 def decimate_minmax(t, arrays):
     """Min/max per fixed, absolute-time bucket. Stable between refreshes."""
@@ -340,6 +330,17 @@ def decimate_minmax(t, arrays):
         out.append(v.tolist())
     return out_t.tolist(), out
 
+
+# --------------------------------------------------
+# Web interface and APIs
+# --------------------------------------------------
+
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+
+@app.route("/api/data")
 def get_data():
     with data_lock:
         t = np.array(timestamps)
